@@ -9,6 +9,10 @@ staging_knobs:
     .pad WIDGET_STAGING_SIZE
 next_oam_index:
     .pad 1
+widgets_amount:
+    .pad 1
+frames_since_last_input:
+    .pad 1
 
 .equ UI_TILES_VRAM_DEST, 0x0_3000
 .equ WIDGET_LAYER_E_SRC, 0x0_2800
@@ -546,7 +550,12 @@ upload_widgets:
     st al, [b]
 
     ld al, 0b10
-    st al, [VDMACTRL]
+    st al, [VDMACTRL] ; OAM
+
+    ld.l al, [next_oam_index]
+    zxt al
+    lsl a, 3
+    st a, [VDMALEN]
 
     st al, [VDMASTART] ; vdmalen already contains the correct amount
 
@@ -554,6 +563,228 @@ upload_widgets:
     st al, [PPUCTRL] ; restore entry blank state
 
     shove pop, dp
+    rts
+
+; a -> JOYPAD1 input
+consume_input:
+    bt a, JOYPAD_CONNECTED
+    jz @return
+    shove push, d, e, f
+    ld.l dl, [frames_since_last_input]
+    cmp dl, 6
+    jltu @no_input
+
+    bt a, BTN_L
+    jz @no_l
+
+    ld.l al, [current_widget]
+    zxt al
+    @nav_l_next:
+        dec al
+        ld.l bl, [widgets_amount]
+        cmp al, bl
+        jltu @nav_l_have
+        ld.l al, [widgets_amount]
+        dec al
+    @nav_l_have:
+        lsl a, 4
+        ld.l bl, [widgets + a]
+        cmp bl, UI_LABEL
+        jnz @nav_l_break
+        lsr a, 4
+        jmp @nav_l_next
+    @nav_l_break:
+    lsr a, 4
+    st.l al, [current_widget]
+    jmp @reset_input_frames
+
+    @no_l:
+    bt a, BTN_R
+    jz @no_r
+
+    ld.l al, [current_widget]
+    zxt al
+    @nav_r_next:
+        inc al
+        ld.l bl, [widgets_amount]
+        cmp al, bl
+        jltu @nav_r_have
+        xor al, al
+    @nav_r_have:
+        lsl a, 4
+        ld.l bl, [widgets + a]
+        cmp bl, UI_LABEL
+        jnz @nav_r_break
+        lsr a, 4
+        jmp @nav_r_next
+    @nav_r_break:
+    lsr a, 4
+    st.l al, [current_widget]
+    jmp @reset_input_frames
+
+    @no_r:
+    ld dl, MMIO_PAGE
+    mtdp dl
+
+    ld.l cl, [current_widget]
+    zxt cl
+    lsl c, 4
+    ld.l bl, [widgets + c] ; kind is offset zero so we're fine
+
+    cmp bl, UI_BUTTON
+    jz @button
+
+    cmp bl, UI_TOGGLE
+    jz @toggle
+
+    cmp bl, UI_SLIDER_H
+    jz @slider_h
+
+    cmp bl, UI_SLIDER_V
+    jz @slider_v
+
+    jmp @no_input
+
+@button:
+    bt a, BTN_A
+    jz @reset_input_frames
+
+    add c, 4
+    ld.l b, [widgets + c]
+    add c, 2
+    ld.l cl, [widgets + c]
+
+    jsr.l cl:b
+    jmp @reset_input_frames
+
+@toggle:
+    bt a, BTN_A
+    jz @reset_input_frames
+
+    add c, 4
+    ld.l b, [widgets + c]
+    add c, 2
+    ld.l dl, [widgets + c]
+
+    ld.l el, [dl:b]
+    cmp el, 0
+    jnz @set_false
+
+    @set_true:
+        ld el, 1
+        st.l el, [dl:b]
+        jmp @reset_input_frames
+
+    @set_false:
+        xor el, el
+        st.l el, [dl:b]
+        jmp @reset_input_frames
+
+@slider_h:
+    add c, 5
+    ld.l fl, [widgets + c] ; step size
+    zxt fl
+
+    inc c
+    ld.l d, [widgets + c]
+    add c, 2
+    ld.l bl, [widgets + c]
+
+    ld.l e, [bl:d] ; underlying value
+
+    bt a, BTN_LEFT
+    jz @no_left
+
+    neg f
+    xchg a, e ; a becomes underlying value, e becomes input, useless, can overwrite
+    add c, 4
+    ld.l e, [widgets + c]
+    add c, 2
+    shove push, b, g
+    ld.l gl, [widgets + c]
+    xchg b, f ; b becomes step size
+    jsr.l gl:e ; a now holds new value
+    shove pop, b, g
+    mov e, a
+    jmp @store_back_hor
+
+    @no_left:
+    bt a, BTN_RIGHT
+    jz @reset_input_frames
+
+    xchg a, e ; a becomes underlying value, e becomes input, useless, can overwrite
+    add c, 4
+    ld.l e, [widgets + c]
+    add c, 2
+    shove push, b, g
+    ld.l gl, [widgets + c]
+    xchg b, f ; b becomes step size
+    jsr.l gl:e ; a now holds new value
+    shove pop, b, g
+    mov e, a
+
+    @store_back_hor:
+    st.l e, [bl:d]
+
+    jmp @reset_input_frames
+
+@slider_v:
+    add c, 5
+    ld.l fl, [widgets + c] ; step size
+    zxt fl
+
+    inc c
+    ld.l d, [widgets + c]
+    add c, 2
+    ld.l bl, [widgets + c]
+
+    ld.l e, [bl:d] ; underlying value
+
+    bt a, BTN_DOWN
+    jz @no_down
+
+    neg f
+    xchg a, e ; a becomes underlying value, e becomes input, useless, can overwrite
+    add c, 4
+    ld.l e, [widgets + c]
+    add c, 2
+    shove push, b, g
+    ld.l gl, [widgets + c]
+    xchg b, f ; b becomes step size
+    jsr.l gl:e ; a now holds new value
+    shove pop, b, g
+    mov e, a
+    jmp @store_back_vert
+
+    @no_down:
+    bt a, BTN_UP
+    jz @reset_input_frames
+
+    xchg a, e ; a becomes underlying value, e becomes input, useless, can overwrite
+    add c, 4
+    ld.l e, [widgets + c]
+    add c, 2
+    shove push, b, g
+    ld.l gl, [widgets + c]
+    xchg b, f ; b becomes step size
+    jsr.l gl:e ; a now holds new value
+    shove pop, b, g
+    mov e, a
+
+    @store_back_vert:
+    st.l e, [bl:d]
+
+@reset_input_frames:
+    xor al, al
+    st.l al, [frames_since_last_input]
+    jmp @return
+
+@no_input:
+    inc dl
+    st.l dl, [frames_since_last_input]
+
+    @return:
+    shove pop, d, e, f
     rts
 
 textures:
