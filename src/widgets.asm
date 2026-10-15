@@ -9,6 +9,8 @@ staging_knobs:
     .pad WIDGET_STAGING_SIZE
 next_oam_index:
     .pad 1
+current_widget:
+    .pad 1
 widgets_amount:
     .pad 1
 frames_since_last_input:
@@ -70,11 +72,8 @@ setup_widgets:
     ld al, 1
     st al, [BG4CTRL]
 
-    ; knob sprites share the 1bpp widget tiles
     xor al, al
     st al, [OAMCTRL]
-
-    xor al, al
     st al, [PPUCTRL]
 
     shove pop, dp
@@ -84,6 +83,57 @@ setup_widgets:
 begin_widgets:
     xor c, c
     st.l cl, [next_oam_index]
+    rts
+
+; al:b -> 24-bit pointer to array of widgets
+; c -> amount of widgets to render
+render_widget_array:
+    shove push, d, e, f, dp
+    mtdp al
+
+    ld.l dl, [current_widget]
+    zxt dl
+    lsl d, 4
+    ld el, [b + d] ; kind
+    cmp el, UI_LABEL
+    jz @no_color
+
+    inc d ; color
+    ld el, [b + d]
+    zxt el
+    push e
+    ld el, UI_YELLOW
+    st el, [b + d]
+
+    @no_color:
+    xor d, d
+    st.l dl, [next_oam_index]
+
+    xor d, d
+    @loop:
+        shove push, a, b, c
+        lsl d, 4
+        add b, d
+        jsr render_widget
+        shove pop, a, b, c
+
+        lsr d, 4
+        inc d
+        cmp d, c
+        jltu @loop
+
+    ld.l dl, [current_widget]
+    zxt dl
+    lsl d, 4
+    ld el, [b + d]
+    cmp el, UI_LABEL
+    jz @return
+    inc d ; color
+    pop e
+    st el, [b + d]
+
+    @return:
+    shove pop, d, e, f, dp
     rts
 
 ; al:b -> 24-bit pointer to any widget
@@ -97,13 +147,14 @@ render_widget:
 ;          uint8_t x, y;
 ;   };
 
-    shove push, d, e, f, g
+    shove push, d, e, f, g, dp
+    mtdp al
 
-    ld.l cl, [al:b] ; kind
-    ld.l dl, [al:b + 1] ; color
+    ld cl, [b] ; kind
+    ld dl, [b + 1] ; color
 
-    ld.l el, [al:b + 2] ; x
-    ld.l fl, [al:b + 3] ; y
+    ld el, [b + 2] ; x
+    ld fl, [b + 3] ; y
 
     cmp cl, UI_LABEL
     jz @render_label
@@ -127,7 +178,7 @@ render_widget:
 @render_label:
 ;   struct Label {
 ;       Widget base;
-;       const __far int *text;
+;       const int *__far text;
 ;       uint8_t max_width;
 ;   }
 
@@ -140,9 +191,9 @@ render_widget:
     mov el, al
     mov f, b
 
-    ld.l b, [el:f + 4]
-    ld.l al, [el:f + 6]
-    ld.l cl, [el:f + 7]
+    ld b, [f + 4]
+    ld al, [f + 6]
+    ld cl, [f + 7]
 
     jsr draw_text
 
@@ -498,7 +549,7 @@ render_widget:
     st.l bl, [next_oam_index]
 
     @return:
-        shove pop, d, e, f, g
+        shove pop, d, e, f, g, dp
         rts
 
 upload_widgets:
