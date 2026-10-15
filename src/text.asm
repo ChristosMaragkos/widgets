@@ -127,10 +127,20 @@ draw_text:
     @loop:
         ld.l gl, [al:b + d]
         inc d
-        cmp gl, 0 ; null terminator
+
+        cmp gl, '\0'
         jz @return
 
-        sub gl, 32 ; font starts at space
+        cmp gl, '\n'
+        jz @wrap
+
+        cmp gl, '\t'
+        jnz @not_tab
+        add e, 4
+        jmp @advance
+
+        @not_tab:
+        sub gl, ' ' ; font starts at space
         and g, 0x3ff
 
         push f
@@ -144,7 +154,6 @@ draw_text:
             lsl f, 10
             or g, f
         pop f
-
 
         push f
         push e
@@ -166,6 +175,8 @@ draw_text:
         pop f
         @advance:
             inc el
+            cmp el, 64
+            jgeu @wrap
             push c
             push a
             mfhi al
@@ -173,11 +184,17 @@ draw_text:
             cmp el, cl
             pop a
             pop c
-            jnz @loop
+            jltu @loop
 
+        dec d
+        ld.l gl, [al:b + d]
+        inc d
+        cmp gl, ' '
+        jnz @maybe_done
         @wrap:
             mfhi el
             inc fl
+            @maybe_done:
             cmp fl, 32
             jz @return
             jmp @loop
