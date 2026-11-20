@@ -1,25 +1,32 @@
-.once
-.include "defs.asm"
+.ifndef WIDGETS_ASM
+.equ WIDGETS_ASM, 1
+.include "../include/defs.inc"
 
 .wram
 .equ WIDGET_STAGING_SIZE, 2048
 staging_widgets:
-    .pad WIDGET_STAGING_SIZE
+    .space WIDGET_STAGING_SIZE
 staging_knobs:
-    .pad WIDGET_STAGING_SIZE
+    .space WIDGET_STAGING_SIZE
 next_oam_index:
-    .pad 1
+    .space 1
 current_widget:
-    .pad 1
+    .space 1
 widgets_amount:
-    .pad 1
+.global widgets_amount
+    .space 1
 frames_since_last_input:
-    .pad 1
+    .space 1
 
-.equ UI_TILES_VRAM_DEST, 0x0_3000
-.equ WIDGET_LAYER_E_SRC, 0x0_2800
+.equ UI_TILES_VRAM_DEST, 0x03000
+.equ WIDGET_LAYER_E_SRC, 0x02800
 
 .rom
+.global setup_widgets
+.global render_widget
+.global render_widget_array
+.global consume_input
+.global upload_widgets
 setup_widgets:
     shove push, dp
     ld al, MMIO_PAGE
@@ -96,7 +103,9 @@ render_widget_array:
     lsl d, 4
     ld el, [b + d] ; kind
     cmp el, UI_LABEL
-    jz @no_color
+    jz .0
+    cmp el, UI_BOX
+    jz .0
 
     inc d ; color
     ld el, [b + d]
@@ -105,12 +114,12 @@ render_widget_array:
     ld el, UI_YELLOW
     st el, [b + d]
 
-    @no_color:
+    .0:
     xor d, d
     st.l dl, [next_oam_index]
 
     xor d, d
-    @loop:
+    .1:
         shove push, a, b, c
         lsl d, 4
         add b, d
@@ -120,25 +129,27 @@ render_widget_array:
         lsr d, 4
         inc d
         cmp d, c
-        jltu @loop
+        jltu .1
 
     ld.l dl, [current_widget]
     zxt dl
     lsl d, 4
     ld el, [b + d]
     cmp el, UI_LABEL
-    jz @return
+    jz .3
+    cmp el, UI_BOX
+    jz .3
     inc d ; color
     pop e
     st el, [b + d]
 
-    @return:
+    .3:
     shove pop, d, e, f, dp
     rts
 
 ; al:b -> 24-bit pointer to any widget
 render_widget:
-;   enum WidgetKind : unsigned int { UI_LABEL, UI_BUTTON, UI_TOGGLE, UI_SLIDER_H, UI_SLIDER_V };
+;   enum WidgetKind : unsigned int { UI_LABEL, UI_BUTTON, UI_TOGGLE, UI_SLIDER_H, UI_SLIDER_V, UI_BOX };
 ;   enum WidgetColor : unsigned int { /* ... all the UI colors defined in color.asm */ };
 ;
 ;   struct Widget {
@@ -157,25 +168,28 @@ render_widget:
     ld fl, [b + 3] ; y
 
     cmp cl, UI_LABEL
-    jz @render_label
+    jz .4
 
     and dl, 0b111 ; no rainbow for widgets
 
     cmp cl, UI_BUTTON
-    jz @render_button
+    jz .5
 
     cmp cl, UI_TOGGLE
-    jz @render_toggle
+    jz .6
 
     cmp cl, UI_SLIDER_H
-    jz @render_slider_h
+    jz .7
 
     cmp cl, UI_SLIDER_V
-    jz @render_slider_v
+    jz .8
 
-    jmp @return
+    cmp cl, UI_BOX
+    jz .9
 
-@render_label:
+    jmp .3
+
+.4:
 ;   struct Label {
 ;       Widget base;
 ;       const int *__far text;
@@ -202,9 +216,9 @@ render_widget:
     pop f
 
     shove pop, a, b
-    jmp @return
+    jmp .3
 
-@render_button:
+.5:
 ; struct Button {
 ;       Widget base;
 ;       __far void (*callback)(void);
@@ -238,9 +252,9 @@ render_widget:
 
     or g, TILE_FLIP_BOTH
     st.l g, [staging_widgets + f]
-    jmp @return
+    jmp .3
 
-@render_toggle:
+.6:
 ; struct Toggle {
 ;       Widget base;
 ;       __far bool* enabled;
@@ -261,11 +275,11 @@ render_widget:
     lsl d, 10
     ld g, TILE_TOP_LEFT_CORNER_TOGGLE
     cmp cl, 0
-    jnz @enabled
+    jnz .27
 
     dec g
 
-    @enabled:
+    .27:
     or g, d
 
     lsl f, 5
@@ -287,9 +301,9 @@ render_widget:
 
     or g, TILE_FLIP_BOTH
     st.l g, [staging_widgets + f]
-    jmp @return
+    jmp .3
 
-@render_slider_h:
+.7:
 ; struct Slider_H {
 ;       Widget base;
 ;       uint8_t width;
@@ -324,12 +338,12 @@ render_widget:
 
     ld.l cl, [al:b + 4]
     cmp cl, 2
-    jleu @no_middle
+    jleu .2
 
-    sub cl, 2
+    sub cl, 3
     ld g, TILE_TOP_EDGE
     or g, d
-    @loop:
+    .1:
         st.l g, [staging_widgets + f]
         add f, 64
         or g, TILE_FLIP_V
@@ -338,9 +352,9 @@ render_widget:
         sub f, 62
 
         and g, 0x1fff
-        djnz cl, @loop
+        djnc cl, .1
 
-    @no_middle:
+    .2:
     ld g, TILE_TOP_LEFT_CORNER
     or g, d
     or g, TILE_FLIP_H
@@ -413,9 +427,9 @@ render_widget:
     inc b
     st.l bl, [next_oam_index]
 
-    jmp @return
+    jmp .3
 
-@render_slider_v:
+.8:
 ; struct Slider_V {
 ;       Widget base;
 ;       uint8_t height;
@@ -446,12 +460,12 @@ render_widget:
 
     ld.l cl, [al:b + 4]
     cmp cl, 2
-    jleu @no_middle
+    jleu .200
 
-    sub cl, 2
+    sub cl, 3
     ld g, TILE_LEFT_EDGE
     or g, d
-    @loop:
+    .100:
         st.l g, [staging_widgets + f]
         add f, 2
         or g, TILE_FLIP_H
@@ -460,9 +474,9 @@ render_widget:
         add f, 62
 
         and g, 0x1fff
-        djnz cl, @loop
+        djnc cl, .100
 
-    @no_middle:
+    .200:
     ld g, TILE_TOP_LEFT_CORNER
     or g, d
     or g, TILE_FLIP_V
@@ -547,8 +561,131 @@ render_widget:
     lsr b, 3
     inc b
     st.l bl, [next_oam_index]
+    jmp .3
 
-    @return:
+.9:
+;   struct Box {
+;       Widget base;
+;       uint8_t w, h;
+;   }
+; c, d, e, f -> kind, color, x, y
+; Hollow w*h border from the button corner tiles + edge tiles.
+; Interior cells are left untouched (staging is zero-init, widgets static).
+    push a
+
+    zxt dl
+    zxt el
+    zxt fl
+
+    lsl d, 10
+
+    ld cl, [b + 4] ; w
+    zxt cl
+    ld al, [b + 5] ; h
+
+    cmp cl, 2
+    jgeu .10
+    ld cl, 2
+    .10:
+    cmp al, 2
+    jgeu .11
+    ld al, 2
+    .11:
+
+    ; grid base: (32 * y + x) * 2
+    lsl f, 5
+    add f, e
+    lsl f, 1
+
+    ; top-left corner
+    ld g, TILE_TOP_LEFT_CORNER
+    or g, d
+    st.l g, [staging_widgets + f]
+    add f, 2
+
+    ; top edge: (w - 2) x TOP_EDGE
+    mov e, c
+    sub e, 2
+    jz .12
+    dec e
+    ld g, TILE_TOP_EDGE
+    or g, d
+    .13:
+    st.l g, [staging_widgets + f]
+    add f, 2
+    djnc e, .13
+
+    .12:
+    ld g, TILE_TOP_LEFT_CORNER
+    or g, d
+    or g, TILE_FLIP_H
+    st.l g, [staging_widgets + f]
+    add f, 2
+
+    ; middle rows: (h - 2)
+    sub al, 2
+    jz .14
+    dec al
+
+    .17:
+    mov g, c
+    lsl g, 1
+    add f, 64
+    sub f, g
+    ld g, TILE_LEFT_EDGE
+    or g, d
+    st.l g, [staging_widgets + f]
+    add f, 2
+
+    mov e, c
+    sub e, 2
+    jz .15
+    dec e
+    .16:
+    add f, 2
+    djnc e, .16
+
+    .15:
+    ld g, TILE_LEFT_EDGE
+    or g, d
+    or g, TILE_FLIP_H
+    st.l g, [staging_widgets + f]
+    add f, 2
+    djnc al, .17
+
+    .14:
+    mov g, c
+    lsl g, 1
+    add f, 64
+    sub f, g
+    ld g, TILE_TOP_LEFT_CORNER
+    or g, d
+    or g, TILE_FLIP_V
+    st.l g, [staging_widgets + f]
+    add f, 2
+
+    mov e, c
+    sub e, 2
+    jz .18
+    dec e
+    ld g, TILE_TOP_EDGE
+    or g, d
+    or g, TILE_FLIP_BOTH
+    .19:
+    st.l g, [staging_widgets + f]
+    add f, 2
+    djnc e, .19
+
+    .18:
+    ld g, TILE_TOP_LEFT_CORNER
+    or g, d
+    or g, TILE_FLIP_BOTH
+    st.l g, [staging_widgets + f]
+
+    pop a
+    jmp .3
+
+    .3:
         shove pop, d, e, f, g, dp
         rts
 
@@ -618,62 +755,69 @@ upload_widgets:
 
 ; a -> JOYPAD1 input
 consume_input:
+    .extern widgets
+    shove push, d, e, f, dp
     bt a, JOYPAD_CONNECTED
-    jz @return
-    shove push, d, e, f
+    jz .3
     ld.l dl, [frames_since_last_input]
     cmp dl, 6
-    jltu @no_input
+    jltu .20
 
     bt a, BTN_L
-    jz @no_l
+    jz .21
 
     ld.l al, [current_widget]
     zxt al
-    @nav_l_next:
+    .22:
         dec al
         ld.l bl, [widgets_amount]
         cmp al, bl
-        jltu @nav_l_have
+        jltu .23
         ld.l al, [widgets_amount]
         dec al
-    @nav_l_have:
+    .23:
         lsl a, 4
         ld.l bl, [widgets + a]
         cmp bl, UI_LABEL
-        jnz @nav_l_break
+        jz .24
+        cmp bl, UI_BOX
+        jnz .25
+        .24:
         lsr a, 4
-        jmp @nav_l_next
-    @nav_l_break:
+        jmp .22
+    .25:
     lsr a, 4
     st.l al, [current_widget]
-    jmp @reset_input_frames
+    jmp .26
 
-    @no_l:
+    .21:
     bt a, BTN_R
-    jz @no_r
+    jz .28
 
     ld.l al, [current_widget]
     zxt al
-    @nav_r_next:
+    .29:
         inc al
         ld.l bl, [widgets_amount]
         cmp al, bl
-        jltu @nav_r_have
+        jltu .30
         xor al, al
-    @nav_r_have:
+    .30:
         lsl a, 4
         ld.l bl, [widgets + a]
         cmp bl, UI_LABEL
-        jnz @nav_r_break
+        jz .31
+        cmp bl, UI_BOX
+        jnz .32
+        .31:
         lsr a, 4
-        jmp @nav_r_next
-    @nav_r_break:
+        jmp .29
+    .32:
     lsr a, 4
     st.l al, [current_widget]
-    jmp @reset_input_frames
+    jmp .26
 
-    @no_r:
+    .28:
     ld dl, MMIO_PAGE
     mtdp dl
 
@@ -683,22 +827,22 @@ consume_input:
     ld.l bl, [widgets + c] ; kind is offset zero so we're fine
 
     cmp bl, UI_BUTTON
-    jz @button
+    jz .33
 
     cmp bl, UI_TOGGLE
-    jz @toggle
+    jz .34
 
     cmp bl, UI_SLIDER_H
-    jz @slider_h
+    jz .35
 
     cmp bl, UI_SLIDER_V
-    jz @slider_v
+    jz .36
 
-    jmp @no_input
+    jmp .20
 
-@button:
+.33:
     bt a, BTN_A
-    jz @reset_input_frames
+    jz .26
 
     add c, 4
     ld.l b, [widgets + c]
@@ -706,11 +850,11 @@ consume_input:
     ld.l cl, [widgets + c]
 
     jsr.l cl:b
-    jmp @reset_input_frames
+    jmp .26
 
-@toggle:
+.34:
     bt a, BTN_A
-    jz @reset_input_frames
+    jz .26
 
     add c, 4
     ld.l b, [widgets + c]
@@ -719,19 +863,19 @@ consume_input:
 
     ld.l el, [dl:b]
     cmp el, 0
-    jnz @set_false
+    jnz .37
 
-    @set_true:
+    .38:
         ld el, 1
         st.l el, [dl:b]
-        jmp @reset_input_frames
+        jmp .26
 
-    @set_false:
+    .37:
         xor el, el
         st.l el, [dl:b]
-        jmp @reset_input_frames
+        jmp .26
 
-@slider_h:
+.35:
     add c, 5
     ld.l fl, [widgets + c] ; step size
     zxt fl
@@ -744,7 +888,7 @@ consume_input:
     ld.l e, [bl:d] ; underlying value
 
     bt a, BTN_LEFT
-    jz @no_left
+    jz .39
 
     neg f
     xchg a, e ; a becomes underlying value, e becomes input, useless, can overwrite
@@ -757,11 +901,11 @@ consume_input:
     jsr.l gl:e ; a now holds new value
     shove pop, b, g
     mov e, a
-    jmp @store_back_hor
+    jmp .40
 
-    @no_left:
+    .39:
     bt a, BTN_RIGHT
-    jz @reset_input_frames
+    jz .26
 
     xchg a, e ; a becomes underlying value, e becomes input, useless, can overwrite
     add c, 4
@@ -774,12 +918,12 @@ consume_input:
     shove pop, b, g
     mov e, a
 
-    @store_back_hor:
+    .40:
     st.l e, [bl:d]
 
-    jmp @reset_input_frames
+    jmp .26
 
-@slider_v:
+.36:
     add c, 5
     ld.l fl, [widgets + c] ; step size
     zxt fl
@@ -792,7 +936,7 @@ consume_input:
     ld.l e, [bl:d] ; underlying value
 
     bt a, BTN_DOWN
-    jz @no_down
+    jz .41
 
     neg f
     xchg a, e ; a becomes underlying value, e becomes input, useless, can overwrite
@@ -805,11 +949,11 @@ consume_input:
     jsr.l gl:e ; a now holds new value
     shove pop, b, g
     mov e, a
-    jmp @store_back_vert
+    jmp .42
 
-    @no_down:
+    .41:
     bt a, BTN_UP
-    jz @reset_input_frames
+    jz .26
 
     xchg a, e ; a becomes underlying value, e becomes input, useless, can overwrite
     add c, 4
@@ -822,31 +966,51 @@ consume_input:
     shove pop, b, g
     mov e, a
 
-    @store_back_vert:
+    .42:
     st.l e, [bl:d]
 
-@reset_input_frames:
+.26:
     xor al, al
     st.l al, [frames_since_last_input]
-    jmp @return
+    jmp .3
 
-@no_input:
+.20:
     inc dl
     st.l dl, [frames_since_last_input]
 
-    @return:
-    shove pop, d, e, f
+    .3:
+    shove pop, d, e, f, dp
     rts
 
 textures:
-    .incbin "../assets/widgets_big.bin"
+    .incbin "../assets/textures.bin"
     .equ WIDGET_TEXTURES_SIZE, 56
 
     .equ UI_LABEL, 0
+    .global UI_LABEL
     .equ UI_BUTTON, 1
+    .global UI_BUTTON
     .equ UI_TOGGLE, 2
+    .global UI_TOGGLE
     .equ UI_SLIDER_H, 3
+    .global UI_SLIDER_H
     .equ UI_SLIDER_V, 4
+    .global UI_SLIDER_V
+    .equ UI_BOX, 5
+    .global UI_BOX
+
+    .equ SIZEOF_WIDGET, 16
+    .global SIZEOF_WIDGET
+    .equ LABEL_PADDING, 8
+    .global LABEL_PADDING
+    .equ BUTTON_PADDING, 9
+    .global BUTTON_PADDING
+    .equ TOGGLE_PADDING, 9
+    .global TOGGLE_PADDING
+    .equ SLIDER_PADDING, 1
+    .global SLIDER_PADDING
+    .equ BOX_PADDING, 10
+    .global BOX_PADDING
 
     .equ TILE_EMPTY, 0
     .equ TILE_TOP_LEFT_CORNER, 1
@@ -856,12 +1020,13 @@ textures:
     .equ TILE_KNOB_H, 5
     .equ TILE_KNOB_V, 6
 
-    .equ TILE_FLIP_H, 0b00_1_0000000000000
-    .equ TILE_FLIP_V, 0b0_1_00000000000000
-    .equ TILE_FLIP_BOTH, 0b0_11_0000000000000
+    .equ TILE_FLIP_H, 0b0010000000000000
+    .equ TILE_FLIP_V, 0b0100000000000000
+    .equ TILE_FLIP_BOTH, 0b0110000000000000
 
     .equ KNOB_MARGIN, 2
     .equ KNOB_WIDTH, 4
 
 .include "text.asm"
 .include "color.asm"
+.endif

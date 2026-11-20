@@ -1,5 +1,6 @@
-.once
-.include "defs.asm"
+.ifndef COLOR_ASM
+.equ COLOR_ASM, 1
+.include "../include/defs.inc"
 
 .equ PALETTE_SIZE, 256
 
@@ -13,14 +14,25 @@
 .equ COLOR_BROWN, 0x1132
 
 .equ UI_WHITE, 0
+.global UI_WHITE
 .equ UI_RED, 1
+.global UI_RED
 .equ UI_GREEN, 2
+.global UI_GREEN
 .equ UI_BLUE, 3
+.global UI_BLUE
 .equ UI_YELLOW, 4
+.global UI_YELLOW
 .equ UI_ORANGE, 5
+.global UI_ORANGE
 .equ UI_LIME, 6
+.global UI_LIME
 .equ UI_BROWN, 7
-.equ UI_RAINBOW, 8
+.global UI_BROWN
+.equ UI_RAINBOW, 8 ; Only for labels!
+.global UI_RAINBOW
+
+.global setup_color
 
 setup_color:
     shove push, d, e, flags, dp
@@ -28,17 +40,17 @@ setup_color:
     sub sp, 256
 
     xor b, b
-    ld el, 8
+    ld el, 7
     xor c, c
-    @pal_loop_outer:
+    .0:
         ld.l a, [colors + b]
         add b, 2
-        @pal_loop_inner:
+        .1:
             st a, [sp + c]
             add c, 2
             bt c, 31
-            jnz @pal_loop_inner
-        djnz el, @pal_loop_outer
+            jnz .1
+        djnc el, .0
 
     xor a, a
     st a, [sp]
@@ -84,11 +96,12 @@ setup_color:
     rts
 
 colors:
-    .dw COLOR_WHITE
-    .dw COLOR_RED
-    .dw COLOR_GREEN
-    .dw COLOR_BLUE
-    .dw COLOR_YELLOW
-    .dw COLOR_ORANGE
-    .dw COLOR_LIME
-    .dw COLOR_BROWN
+    .word COLOR_WHITE
+    .word COLOR_RED
+    .word COLOR_GREEN
+    .word COLOR_BLUE
+    .word COLOR_YELLOW
+    .word COLOR_ORANGE
+    .word COLOR_LIME
+    .word COLOR_BROWN
+.endif

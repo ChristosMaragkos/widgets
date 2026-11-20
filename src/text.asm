@@ -1,11 +1,14 @@
-.once
-.include "defs.asm"
+.ifndef TEXT_ASM
+.equ TEXT_ASM, 1
+.include "../include/defs.inc"
 
 .wram
 staging_text:
-    .pad 8192
+    .space 8192
 
 .rom
+
+.global setup_text
 
 setup_text:
     shove push, d, e, dp
@@ -37,7 +40,7 @@ setup_text:
     ld a, 4
     st a, [BG2HOFS]
 
-    ld al, 0b0_00_10_00_0
+    ld al, 0b00010000
     st al, [BG1CTRL]
     st al, [BG2CTRL]
 
@@ -110,7 +113,7 @@ draw_text:
     shove push, d, e, f, g, hi
 
     cmp cl, 0
-    jz @return
+    jz .0
 
     xor d, d ; string char idx
     xor e, e
@@ -124,32 +127,32 @@ draw_text:
 
     and cl, 0x3f
 
-    @loop:
+    .1:
         ld.l gl, [al:b + d]
         inc d
 
         cmp gl, '\0'
-        jz @return
+        jz .0
 
         cmp gl, '\n'
-        jz @wrap
+        jz .2
 
         cmp gl, '\t'
-        jnz @not_tab
+        jnz .3
         add e, 4
-        jmp @advance
+        jmp .4
 
-        @not_tab:
+        .3:
         sub gl, ' ' ; font starts at space
         and g, 0x3ff
 
         push f
         ld f, [sp+16] ; color, WAS at sp + 14, went to sp + 16 after the push
         cmp f, 8
-        jnz @not_rainbow
+        jnz .5
         add f, d
 
-        @not_rainbow:
+        .5:
             and f, 0b111
             lsl f, 10
             or g, f
@@ -165,18 +168,18 @@ draw_text:
  
         pop e
         bt el, 1
-        jz @even
+        jz .6
 
         add f, 4096
 
-        @even:
+        .6:
             st.l g, [staging_text + f]
 
         pop f
-        @advance:
+        .4:
             inc el
             cmp el, 64
-            jgeu @wrap
+            jgeu .2
             push c
             push a
             mfhi al
@@ -184,25 +187,26 @@ draw_text:
             cmp el, cl
             pop a
             pop c
-            jltu @loop
+            jltu .1
 
         dec d
         ld.l gl, [al:b + d]
         inc d
         cmp gl, ' '
-        jnz @maybe_done
-        @wrap:
+        jnz .7
+        .2:
             mfhi el
             inc fl
-            @maybe_done:
+            .7:
             cmp fl, 32
-            jz @return
-            jmp @loop
+            jz .0
+            jmp .1
 
-    @return:
+    .0:
         shove pop, d, e, f, g, hi
         rts
 
 font:
     .incbin "../assets/font_3x4.bin"
     .equ FONT_BYTES, 768
+.endif

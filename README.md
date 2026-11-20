@@ -13,6 +13,4 @@ Controls:
 Limitations:
 - Widgets must be laid out in memory in the same order you want to navigate them, from first to last
 - Widgets must be transferred to RAM on boot to manipulate their color
-
-Future features:
-- Boxes(?)
+- You need to declare widgets as `.global` and widgets_count as `.extern` in your project
